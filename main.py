@@ -5,6 +5,8 @@ from telegram import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
+import asyncio
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -133,6 +135,9 @@ def root():
 
 
 if __name__ == "__main__":
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     application.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 10000)),
