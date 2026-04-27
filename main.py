@@ -119,8 +119,12 @@ application.add_handler(CallbackQueryHandler(quality_selected))
 def webhook():
     json_update = request.get_json(force=True)
     update = Update.de_json(json_update, application.bot)
-    application.update_queue.put_nowait(update)
-    return "OK"
+
+    import asyncio
+    asyncio.create_task(application.process_update(update))
+
+    return "ok"
+
 
 
 @app.route("/")
