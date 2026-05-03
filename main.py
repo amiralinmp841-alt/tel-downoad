@@ -100,6 +100,7 @@ if __name__ == "__main__":
 
     async def main():
         await application.initialize()
+        await application.start()   # ✅ خیلی مهم
         await bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
     asyncio.run(main())
