@@ -1,147 +1,106 @@
 import os
+import subprocess
 from flask import Flask, request
-from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
-import asyncio
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-)
-from yt_dlp import YoutubeDL
+# ================== CONFIG ==================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # https://your-service.onrender.com
+DOWNLOAD_DIR = "downloads"
+MAX_SIZE_MB = 20
+# ============================================
 
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # در Render تنظیم میکنی
+bot = Bot(BOT_TOKEN)
+app_flask = Flask(__name__)
+application = Application.builder().token(BOT_TOKEN).build()
 
-app = Flask(__name__)
-application = Application.builder().token(TOKEN).build()
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# -------- Video Download --------
+def download_video(url):
+    output = f"{DOWNLOAD_DIR}/%(title)s.%(ext)s"
+    cmd = [
+        "yt-dlp",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        "-o", output,
+        url
+    ]
+    subprocess.run(cmd, check=True)
 
-# استخراج اطلاعات ویدیو
-def extract_video_info(url):
-    ydl_opts = {"quiet": True, "dump_single_json": True}
-    with YoutubeDL(ydl_opts) as ydl:
-        return ydl.extract_info(url, download=False)
+    files = sorted(
+        [os.path.join(DOWNLOAD_DIR, f) for f in os.listdir(DOWNLOAD_DIR)],
+        key=os.path.getctime
+    )
+    return files[-1]
 
+# -------- Split Video --------
+def split_video(video_path):
+    parts_dir = video_path.replace(".mp4", "_parts")
+    os.makedirs(parts_dir, exist_ok=True)
 
-# دانلود فایل با کیفیت انتخابی
-def download_video(url, format_id):
-    ydl_opts = {
-        "format": format_id,
-        "outtmpl": "/tmp/video.%(ext)s",
-    }
-    with YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(result)
+    cmd = [
+        "ffmpeg",
+        "-i", video_path,
+        "-c", "copy",
+        "-map", "0",
+        "-f", "segment",
+        "-segment_size", str(MAX_SIZE_MB * 1024 * 1024),
+        f"{parts_dir}/part_%03d.mp4"
+    ]
+    subprocess.run(cmd, check=True)
 
+    return sorted(os.path.join(parts_dir, f) for f in os.listdir(parts_dir))
 
-# شروع
-async def start(update: Update, context):
-    await update.message.reply_text("سلام! لینک هر صفحه‌ای رو بفرست تا ویدیوهاشو برات بفرستم.")
+# -------- Handlers --------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🎬 لینک ویدیو رو بفرست")
 
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    url = update.message.text
 
-# وقتی لینک می‌فرسته
-async def handle_link(update: Update, context):
-    url = update.message.text.strip()
-
-    await update.message.reply_text("⏳ در حال بررسی لینک...")
+    await context.bot.send_message(chat_id, "⏳ در حال دانلود...")
 
     try:
-        info = extract_video_info(url)
+        video = download_video(url)
+        parts = split_video(video)
 
-        # اگر چند ویدیو داخل صفحه بود (مثل playlist)
-        entries = info.get("entries", [info])
-
-        for video in entries:
-            formats = video.get("formats", [])
-            video_id = video.get("id")
-
-            # استخراج کیفیت‌ها
-            quality_options = []
-            for f in formats:
-                if f.get("vcodec") != "none":
-                    q = f.get("format_id")
-                    label = f"{f.get('height', '???')}p  -  {f.get('ext')}"
-                    quality_options.append((label, q))
-
-            # اگر فقط یک کیفیت هست → مستقیم ارسال کنیم
-            if len(quality_options) == 1:
-                filepath = download_video(video["webpage_url"], quality_options[0][1])
-                await update.message.reply_video(open(filepath, "rb"))
-                continue
-
-            # اگر چند کیفیت هست → دکمه‌ها را بفرست
-            keyboard = [
-                [
-                    InlineKeyboardButton(label, callback_data=f"{video['webpage_url']}|{fmt}")
-                ]
-                for label, fmt in quality_options
-            ]
-
-            await update.message.reply_text(
-                f"🎥 ویدیو: {video.get('title', 'Video')}\n"
-                "یکی از کیفیت‌ها را انتخاب کن:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
+        for part in parts:
+            await context.bot.send_video(
+                chat_id=chat_id,
+                video=open(part, "rb"),
+                supports_streaming=True
             )
 
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا در پردازش لینک:\n{e}")
-
-
-# وقتی کیفیت انتخاب می‌شود
-async def quality_selected(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-
-    url, format_id = query.data.split("|")
-
-    await query.edit_message_text("⏳ در حال دانلود ویدیو...")
-
-    try:
-        filepath = download_video(url, format_id)
-        await query.message.reply_video(open(filepath, "rb"))
+        await context.bot.send_message(chat_id, "✅ ارسال کامل شد")
 
     except Exception as e:
-        await query.message.reply_text(f"❌ خطا هنگام دانلود:\n{e}")
+        await context.bot.send_message(chat_id, f"❌ خطا:\n{e}")
 
-
-# اتصال هندلرها
+# -------- Telegram App --------
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
-application.add_handler(CallbackQueryHandler(quality_selected))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
-
-@app.route(f"/{TOKEN}", methods=["POST"])
+# -------- Webhook Endpoint --------
+@app_flask.route("/webhook", methods=["POST"])
 def webhook():
-    json_update = request.get_json(force=True)
-    update = Update.de_json(json_update, application.bot)
+    update = Update.de_json(request.get_json(force=True), bot)
+    application.update_queue.put_nowait(update)
+    return "OK"
 
-    import asyncio
-    asyncio.create_task(application.process_update(update))
-
-    return "ok"
-
-
-
-@app.route("/")
-def root():
-    return "Bot is running!"
-
+# -------- Render Entry --------
+@app_flask.route("/")
+def home():
+    return "Bot is running"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app_url = os.environ.get("RENDER_EXTERNAL_URL")
+    import asyncio
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path="webhook",
-        webhook_url=f"{app_url}/webhook",
-    )
+    async def main():
+        await application.initialize()
+        await bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
+    asyncio.run(main())
+    app_flask.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
