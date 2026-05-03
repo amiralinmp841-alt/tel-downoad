@@ -135,12 +135,13 @@ def root():
 
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    port = int(os.environ.get("PORT", 5000))
+    app_url = os.environ.get("RENDER_EXTERNAL_URL")
 
     application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", 10000)),
-        url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+        port=port,
+        url_path="webhook",
+        webhook_url=f"{app_url}/webhook",
     )
+
