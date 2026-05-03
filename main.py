@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # https://your-service.onrender.com
 DOWNLOAD_DIR = "downloads"
-MAX_SIZE_MB = 20
+MAX_SIZE_MB = 17
 # ============================================
 
 bot = Bot(BOT_TOKEN)
